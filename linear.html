@@ -43,11 +43,12 @@
         const CELL_SIZE = canvas.width / GRID_SIZE;
         
         // Simulation parameters - FIXED VALUES
-        const FIELD_STRENGTH = 1.0;      // Increased from 0.1
-        const DIFFUSION_RATE = 0.2;      // Reduced for more localized fields
-        const DECAY_RATE = 0.98;         // Faster decay
-        const FORCE_MULTIPLIER = 0.5;    // Much stronger force
-        const MAX_VELOCITY = 2.0;        // Velocity cap
+        const FIELD_STRENGTH = 1.0;
+        const DIFFUSION_RATE = 0.15;     // Slightly reduced for stability
+        const DECAY_RATE = 0.995;        // Much slower decay to allow propagation
+        const FORCE_MULTIPLIER = 0.5;
+        const MAX_VELOCITY = 2.0;
+        const MIN_FIELD_THRESHOLD = 1e-6; // Very small threshold for numerical stability
         
         let grid = [];
         let isPaused = false;
@@ -113,7 +114,7 @@
             return neighbors;
         }
         
-        // FIXED: Better gradient calculation
+        // Calculate gradient
         function calculateGradient(x, y) {
             let gradX = 0, gradY = 0;
             
@@ -151,13 +152,14 @@
                 }
             }
             
-            // 2. Propagate gravity fields (diffusion)
+            // 2. Propagate gravity fields (diffusion) - FIXED: No threshold check
             const newFields = grid.map(row => row.map(cell => cell.gravityField));
             
             for (let y = 0; y < GRID_SIZE; y++) {
                 for (let x = 0; x < GRID_SIZE; x++) {
                     const cell = grid[y][x];
-                    if (cell.gravityField > 0.01) { // Higher threshold
+                    // REMOVED threshold check - let all fields propagate
+                    if (cell.gravityField > MIN_FIELD_THRESHOLD) {
                         const neighbors = getNeighbors(x, y);
                         const propagated = cell.gravityField * DIFFUSION_RATE;
                         const perNeighbor = propagated / neighbors.length;
@@ -170,10 +172,14 @@
                 }
             }
             
-            // Apply new fields and decay
+            // Apply new fields and decay - only remove truly negligible values
             for (let y = 0; y < GRID_SIZE; y++) {
                 for (let x = 0; x < GRID_SIZE; x++) {
                     grid[y][x].gravityField = newFields[y][x] * DECAY_RATE;
+                    // Clean up truly negligible values to prevent numerical issues
+                    if (grid[y][x].gravityField < MIN_FIELD_THRESHOLD) {
+                        grid[y][x].gravityField = 0;
+                    }
                 }
             }
             
@@ -187,7 +193,7 @@
                         // Calculate force from gradient
                         const gradient = calculateGradient(x, y);
                         
-                        // Update velocity with stronger force
+                        // Update velocity with force
                         cell.particleVelX += gradient.x * FORCE_MULTIPLIER;
                         cell.particleVelY += gradient.y * FORCE_MULTIPLIER;
                         
@@ -256,9 +262,11 @@
                 for (let x = 0; x < GRID_SIZE; x++) {
                     const cell = grid[y][x];
                     
-                    // Gravity field as blue intensity
-                    if (cell.gravityField > 0.01) {
-                        const intensity = Math.min(cell.gravityField * 20, 255); // Adjusted scaling
+                    // Gravity field as blue intensity - show even very weak fields
+                    if (cell.gravityField > MIN_FIELD_THRESHOLD) {
+                        // Logarithmic scaling to show weak fields better
+                        const logField = Math.log10(cell.gravityField + 1e-10);
+                        const intensity = Math.max(0, Math.min(255, (logField + 10) * 25));
                         ctx.fillStyle = `rgb(0, 0, ${Math.floor(intensity)})`;
                         ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
                     }
@@ -283,7 +291,7 @@
                 const cell = grid[gridY][gridX];
                 document.getElementById('info').innerHTML = 
                     `Cell (${gridX}, ${gridY})<br>` +
-                    `Gravity Field: ${cell.gravityField.toFixed(4)}<br>` +
+                    `Gravity Field: ${cell.gravityField.toExponential(3)}<br>` +
                     `Particle Mass: ${cell.particleMass.toFixed(2)}<br>` +
                     `Velocity: (${cell.particleVelX.toFixed(3)}, ${cell.particleVelY.toFixed(3)})`;
             }
