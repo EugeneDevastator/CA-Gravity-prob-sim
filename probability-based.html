@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Gravity Cellular Automaton</title>
+    <title>Gravity Cellular Automaton with Velocity</title>
     <style>
         body { 
             font-family: Arial, sans-serif; 
@@ -24,7 +24,7 @@
     </style>
 </head>
 <body>
-    <h2>Gravity Cellular Automaton</h2>
+    <h2>Gravity Cellular Automaton with Velocity</h2>
     <canvas id="canvas" width="500" height="500"></canvas>
     <div class="controls">
         <button onclick="addParticle()">Add Random Particle</button>
@@ -32,7 +32,7 @@
         <button onclick="togglePause()">[SPACE] Pause/Resume</button>
     </div>
     <div class="info" id="info">
-        Hover over cells to see field values<br>
+        Hover over cells to see field values and velocity<br>
         Red = Particles, Blue intensity = Gravity field strength
     </div>
 
@@ -46,7 +46,10 @@
         const FIELD_STRENGTH = 0.1;
         const DIFFUSION_RATE = 0.3;
         const DECAY_RATE = 0.995;
-        const MOVE_PROBABILITY_SCALE = 11; // Higher = more sensitive to field differences
+        const VELOCITY_DAMPING = 0.95; // Velocity decay per frame
+        const GRAVITY_ACCELERATION = 0.02; // How much gravity affects velocity
+        const VELOCITY_MOVE_THRESHOLD = 0.01; // Minimum velocity magnitude to attempt movement
+        const VELOCITY_MOVE_SCALE = 5.0; // Scales velocity to movement probability
         
         let grid = [];
         let isPaused = false;
@@ -57,6 +60,12 @@
             constructor() {
                 this.gravityField = 0;
                 this.particleMass = 0;
+                this.velocityX = 0;
+                this.velocityY = 0;
+            }
+            
+            getVelocityMagnitude() {
+                return Math.sqrt(this.velocityX * this.velocityX + this.velocityY * this.velocityY);
             }
         }
         
@@ -74,14 +83,17 @@
         // Add a particle at random position
         function addParticle() {
             for (let ii = 0; ii < 10; ii++) {
-            const x = Math.floor(Math.random() * GRID_SIZE);
-            const y = Math.floor(Math.random() * GRID_SIZE);
-            const cell = grid[y][x];
-            
-            if (cell.particleMass === 0) {
-                cell.particleMass = 1 + Math.random() * 2; // mass 1-3
+                const x = Math.floor(Math.random() * GRID_SIZE);
+                const y = Math.floor(Math.random() * GRID_SIZE);
+                const cell = grid[y][x];
+                
+                if (cell.particleMass === 0) {
+                    cell.particleMass = 1 + Math.random() * 2; // mass 1-3
+                    // Add some random initial velocity
+                    cell.velocityX = (Math.random() - 0.5) * 0.1;
+                    cell.velocityY = (Math.random() - 0.5) * 0.1;
+                }
             }
-}
         }
         
         // Clear everything
@@ -103,72 +115,89 @@
                     const nx = x + dx;
                     const ny = y + dy;
                     if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-                        neighbors.push({x: nx, y: ny, cell: grid[ny][nx]});
+                        neighbors.push({x: nx, y: ny, dx: dx, dy: dy, cell: grid[ny][nx]});
                     }
                 }
             }
             return neighbors;
         }
         
-		// Calculate movement probabilities based on field gradient
-		function calculateMoveProbabilities(x, y) {
-		    const neighbors = getNeighbors(x, y);
-		    const currentField = grid[y][x].gravityField;
-		    const probabilities = [];
-		    
-		    neighbors.forEach(neighbor => {
-		        // Calculate gradient (difference in field strength)
-		        const fieldDifference = neighbor.cell.gravityField - currentField;
-		        
-		        // Only move towards higher field (positive gradient)
-		        if (fieldDifference > 0) {
-		            // Convert gradient to probability (0 to 1)
-		            const probability = Math.min(fieldDifference * MOVE_PROBABILITY_SCALE, 1.0);
-		            probabilities.push({
-		                x: neighbor.x,
-		                y: neighbor.y,
-		                probability: probability,
-		                occupied: neighbor.cell.particleMass > 0,
-		                gradient: fieldDifference
-		            });
-		        } else {
-		            // Still include as option but with very low probability
-		            probabilities.push({
-		                x: neighbor.x,
-		                y: neighbor.y,
-		                probability: 0.01, // Small chance for random movement
-		                occupied: neighbor.cell.particleMass > 0,
-		                gradient: fieldDifference
-		            });
-		        }
-		    });
-		    
-		    return probabilities;
-		}
-		
-		// Choose a move based on gradient probabilities
-		function chooseMove(probabilities) {
-		    const availableMoves = probabilities.filter(p => !p.occupied);
-		    
-		    if (availableMoves.length === 0) return null;
-		    
-		    // Calculate total weight for probability selection
-		    const totalWeight = availableMoves.reduce((sum, move) => sum + move.probability, 0);
-		    
-		    if (totalWeight === 0) return null;
-		    
-		    let random = Math.random() * totalWeight;
-		    
-		    for (const move of availableMoves) {
-		        random -= move.probability;
-		        if (random <= 0) {
-		            return move;
-		        }
-		    }
-		    
-		    return null;
-		}
-
+        // Calculate gravity force on particle
+        function calculateGravityForce(x, y) {
+            const neighbors = getNeighbors(x, y);
+            let forceX = 0;
+            let forceY = 0;
+            
+            neighbors.forEach(neighbor => {
+                const fieldStrength = neighbor.cell.gravityField;
+                if (fieldStrength > 0.001) {
+                    // Force points towards higher field
+                    forceX += neighbor.dx * fieldStrength;
+                    forceY += neighbor.dy * fieldStrength;
+                }
+            });
+            
+            return { x: forceX * GRAVITY_ACCELERATION, y: forceY * GRAVITY_ACCELERATION };
+        }
+        
+        // Calculate movement probabilities based on velocity
+        function calculateVelocityMoveProbabilities(x, y, velocityX, velocityY) {
+            const neighbors = getNeighbors(x, y);
+            const velocityMag = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+            
+            if (velocityMag < VELOCITY_MOVE_THRESHOLD) {
+                return []; // Not enough velocity to move
+            }
+            
+            // Normalize velocity direction
+            const velDirX = velocityX / velocityMag;
+            const velDirY = velocityY / velocityMag;
+            
+            const probabilities = [];
+            
+            neighbors.forEach(neighbor => {
+                // Calculate how aligned this direction is with velocity
+                const alignment = neighbor.dx * velDirX + neighbor.dy * velDirY;
+                
+                if (alignment > 0) { // Only consider directions aligned with velocity
+                    // Probability based on velocity magnitude and direction alignment
+                    const probability = Math.min(velocityMag * VELOCITY_MOVE_SCALE * alignment, 1.0);
+                    
+                    probabilities.push({
+                        x: neighbor.x,
+                        y: neighbor.y,
+                        probability: probability,
+                        occupied: neighbor.cell.particleMass > 0,
+                        alignment: alignment
+                    });
+                }
+            });
+            
+            return probabilities;
+        }
+        
+        // Choose a move based on velocity probabilities
+        function chooseMove(probabilities) {
+            const availableMoves = probabilities.filter(p => !p.occupied);
+            
+            if (availableMoves.length === 0) return null;
+            
+            // Calculate total weight for probability selection
+            const totalWeight = availableMoves.reduce((sum, move) => sum + move.probability, 0);
+            
+            if (totalWeight === 0) return null;
+            
+            let random = Math.random() * totalWeight;
+            
+            for (const move of availableMoves) {
+                random -= move.probability;
+                if (random <= 0) {
+                    return move;
+                }
+            }
+            
+            return null;
+        }
         
         // Simulation step
         function step() {
@@ -210,15 +239,35 @@
                 }
             }
             
-            // 3. Move particles probabilistically based on field strength
+            // 3. Update particle velocities based on gravity
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cell = grid[y][x];
+                    if (cell.particleMass > 0) {
+                        // Calculate gravity force
+                        const force = calculateGravityForce(x, y);
+                        
+                        // Update velocity (F = ma, assuming mass affects inertia)
+                        const acceleration = 1.0 / cell.particleMass; // Heavier particles accelerate slower
+                        cell.velocityX += force.x * acceleration;
+                        cell.velocityY += force.y * acceleration;
+                        
+                        // Apply damping
+                        cell.velocityX *= VELOCITY_DAMPING;
+                        cell.velocityY *= VELOCITY_DAMPING;
+                    }
+                }
+            }
+            
+            // 4. Move particles based on velocity probabilities
             const particleUpdates = [];
             
             for (let y = 0; y < GRID_SIZE; y++) {
                 for (let x = 0; x < GRID_SIZE; x++) {
                     const cell = grid[y][x];
                     if (cell.particleMass > 0) {
-                        // Calculate movement probabilities for each neighbor
-                        const probabilities = calculateMoveProbabilities(x, y);
+                        // Calculate movement probabilities based on velocity
+                        const probabilities = calculateVelocityMoveProbabilities(x, y, cell.velocityX, cell.velocityY);
                         
                         // Choose a move based on probabilities
                         const chosenMove = chooseMove(probabilities);
@@ -227,7 +276,9 @@
                             particleUpdates.push({
                                 fromX: x, fromY: y,
                                 toX: chosenMove.x, toY: chosenMove.y,
-                                mass: cell.particleMass
+                                mass: cell.particleMass,
+                                velocityX: cell.velocityX,
+                                velocityY: cell.velocityY
                             });
                         }
                     }
@@ -242,7 +293,11 @@
                 // Double-check target cell is still empty (avoid conflicts)
                 if (toCell.particleMass === 0) {
                     toCell.particleMass = update.mass;
+                    toCell.velocityX = update.velocityX;
+                    toCell.velocityY = update.velocityY;
                     fromCell.particleMass = 0;
+                    fromCell.velocityX = 0;
+                    fromCell.velocityY = 0;
                 }
             });
         }
@@ -264,7 +319,7 @@
                         ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
                     }
                     
-                    // Particles as red dots
+                    // Particles as red dots with velocity indicators
                     if (cell.particleMass > 0) {
                         const size = Math.max(2, cell.particleMass * 2);
                         ctx.fillStyle = 'red';
@@ -273,22 +328,41 @@
                             y * CELL_SIZE + (CELL_SIZE - size) / 2,
                             size, size
                         );
+                        
+                        // Draw velocity vector
+                        const velMag = cell.getVelocityMagnitude();
+                        if (velMag > 0.01) {
+                            const centerX = x * CELL_SIZE + CELL_SIZE / 2;
+                            const centerY = y * CELL_SIZE + CELL_SIZE / 2;
+                            const endX = centerX + cell.velocityX * 20;
+                            const endY = centerY + cell.velocityY * 20;
+                            
+                            ctx.strokeStyle = 'yellow';
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            ctx.moveTo(centerX, centerY);
+                            ctx.lineTo(endX, endY);
+                            ctx.stroke();
+                        }
                     }
                 }
             }
             
-            // Show field value at mouse position
+            // Show field value and velocity at mouse position
             const gridX = Math.floor(mouseX / CELL_SIZE);
             const gridY = Math.floor(mouseY / CELL_SIZE);
             if (gridX >= 0 && gridX < GRID_SIZE && gridY >= 0 && gridY < GRID_SIZE) {
                 const cell = grid[gridY][gridX];
-                const probabilities = cell.particleMass > 0 ? calculateMoveProbabilities(gridX, gridY) : [];
+                const velMag = cell.getVelocityMagnitude();
+                const probabilities = cell.particleMass > 0 ? calculateVelocityMoveProbabilities(gridX, gridY, cell.velocityX, cell.velocityY) : [];
                 const maxProb = probabilities.length > 0 ? Math.max(...probabilities.map(p => p.probability)) : 0;
                 
                 document.getElementById('info').innerHTML = 
                     `Cell (${gridX}, ${gridY})<br>` +
                     `Gravity Field: ${cell.gravityField.toFixed(4)}<br>` +
                     `Particle Mass: ${cell.particleMass.toFixed(2)}<br>` +
+                    `Velocity: (${cell.velocityX.toFixed(3)}, ${cell.velocityY.toFixed(3)})<br>` +
+                    `Velocity Magnitude: ${velMag.toFixed(3)}<br>` +
                     `Max Move Probability: ${maxProb.toFixed(3)}`;
             }
         }
