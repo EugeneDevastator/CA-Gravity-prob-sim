@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gravity Cellular Automaton</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px;
+            background: #222;
+            color: white;
+        }
+        canvas { 
+            border: 1px solid #666; 
+            cursor: crosshair;
+            background: black;
+        }
+        .controls {
+            margin: 10px 0;
+        }
+        .info {
+            margin: 10px 0;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h2>Gravity Cellular Automaton</h2>
+    <canvas id="canvas" width="500" height="500"></canvas>
+    <div class="controls">
+        <button onclick="addParticle()">Add Random Particle</button>
+        <button onclick="clearAll()">Clear All</button>
+        <button onclick="togglePause()">[SPACE] Pause/Resume</button>
+    </div>
+    <div class="info" id="info">
+        Hover over cells to see field values<br>
+        Red = Particles, Blue intensity = Gravity field strength
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const GRID_SIZE = 100;
+        const CELL_SIZE = canvas.width / GRID_SIZE;
+        
+        // Simulation parameters
+        const FIELD_STRENGTH = 0.1;
+        const DIFFUSION_RATE = 0.3;
+        const DECAY_RATE = 0.995;
+        const MOVE_PROBABILITY_SCALE = 0.01; // Higher = more sensitive to field differences
+        
+        let grid = [];
+        let isPaused = false;
+        let mouseX = 0, mouseY = 0;
+        
+        // Cell structure
+        class Cell {
+            constructor() {
+                this.gravityField = 0;
+                this.particleMass = 0;
+            }
+        }
+        
+        // Initialize grid
+        function initGrid() {
+            grid = [];
+            for (let y = 0; y < GRID_SIZE; y++) {
+                grid[y] = [];
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    grid[y][x] = new Cell();
+                }
+            }
+        }
+        
+        // Add a particle at random position
+        function addParticle() {
+            const x = Math.floor(Math.random() * GRID_SIZE);
+            const y = Math.floor(Math.random() * GRID_SIZE);
+            const cell = grid[y][x];
+            
+            if (cell.particleMass === 0) {
+                cell.particleMass = 1 + Math.random() * 2; // mass 1-3
+            }
+        }
+        
+        // Clear everything
+        function clearAll() {
+            initGrid();
+        }
+        
+        // Toggle pause
+        function togglePause() {
+            isPaused = !isPaused;
+        }
+        
+        // Get neighbors safely
+        function getNeighbors(x, y) {
+            const neighbors = [];
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (dx === 0 && dy === 0) continue;
+                    const nx = x + dx;
+                    const ny = y + dy;
+                    if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
+                        neighbors.push({x: nx, y: ny, cell: grid[ny][nx]});
+                    }
+                }
+            }
+            return neighbors;
+        }
+        
+        // Calculate movement probabilities based on field strength
+        function calculateMoveProbabilities(x, y) {
+            const neighbors = getNeighbors(x, y);
+            const probabilities = [];
+            
+            neighbors.forEach(neighbor => {
+                // Higher field = higher probability to move there
+                const fieldStrength = neighbor.cell.gravityField;
+                const probability = Math.min(fieldStrength * MOVE_PROBABILITY_SCALE, 1.0);
+                probabilities.push({
+                    x: neighbor.x,
+                    y: neighbor.y,
+                    probability: probability,
+                    occupied: neighbor.cell.particleMass > 0
+                });
+            });
+            
+            return probabilities;
+        }
+        
+        // Choose a move based on probabilities
+        function chooseMove(probabilities) {
+            // Filter out occupied cells
+            const availableMoves = probabilities.filter(p => !p.occupied);
+            
+            if (availableMoves.length === 0) return null;
+            
+            // Try each move based on its probability
+            for (const move of availableMoves) {
+                if (Math.random() < move.probability) {
+                    return move;
+                }
+            }
+            
+            return null; // No move chosen this step
+        }
+        
+        // Simulation step
+        function step() {
+            if (isPaused) return;
+            
+            // 1. Generate gravity fields from particles
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cell = grid[y][x];
+                    if (cell.particleMass > 0) {
+                        cell.gravityField += cell.particleMass * FIELD_STRENGTH;
+                    }
+                }
+            }
+            
+            // 2. Propagate gravity fields (diffusion)
+            const newFields = grid.map(row => row.map(cell => cell.gravityField));
+            
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cell = grid[y][x];
+                    if (cell.gravityField > 0.001) {
+                        const neighbors = getNeighbors(x, y);
+                        const propagated = cell.gravityField * DIFFUSION_RATE;
+                        const perNeighbor = propagated / neighbors.length;
+                        
+                        neighbors.forEach(n => {
+                            newFields[n.y][n.x] += perNeighbor;
+                        });
+                        newFields[y][x] -= propagated;
+                    }
+                }
+            }
+            
+            // Apply new fields and decay
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    grid[y][x].gravityField = newFields[y][x] * DECAY_RATE;
+                }
+            }
+            
+            // 3. Move particles probabilistically based on field strength
+            const particleUpdates = [];
+            
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cell = grid[y][x];
+                    if (cell.particleMass > 0) {
+                        // Calculate movement probabilities for each neighbor
+                        const probabilities = calculateMoveProbabilities(x, y);
+                        
+                        // Choose a move based on probabilities
+                        const chosenMove = chooseMove(probabilities);
+                        
+                        if (chosenMove) {
+                            particleUpdates.push({
+                                fromX: x, fromY: y,
+                                toX: chosenMove.x, toY: chosenMove.y,
+                                mass: cell.particleMass
+                            });
+                        }
+                    }
+                }
+            }
+            
+            // Apply particle movements
+            particleUpdates.forEach(update => {
+                const fromCell = grid[update.fromY][update.fromX];
+                const toCell = grid[update.toY][update.toX];
+                
+                // Double-check target cell is still empty (avoid conflicts)
+                if (toCell.particleMass === 0) {
+                    toCell.particleMass = update.mass;
+                    fromCell.particleMass = 0;
+                }
+            });
+        }
+        
+        // Render
+        function render() {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw gravity fields
+            for (let y = 0; y < GRID_SIZE; y++) {
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    const cell = grid[y][x];
+                    
+                    // Gravity field as blue intensity
+                    if (cell.gravityField > 0.001) {
+                        const intensity = Math.min(cell.gravityField * 50, 255);
+                        ctx.fillStyle = `rgb(0, 0, ${Math.floor(intensity)})`;
+                        ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                    }
+                    
+                    // Particles as red dots
+                    if (cell.particleMass > 0) {
+                        const size = Math.max(2, cell.particleMass * 2);
+                        ctx.fillStyle = 'red';
+                        ctx.fillRect(
+                            x * CELL_SIZE + (CELL_SIZE - size) / 2,
+                            y * CELL_SIZE + (CELL_SIZE - size) / 2,
+                            size, size
+                        );
+                    }
+                }
+            }
+            
+            // Show field value at mouse position
+            const gridX = Math.floor(mouseX / CELL_SIZE);
+            const gridY = Math.floor(mouseY / CELL_SIZE);
+            if (gridX >= 0 && gridX < GRID_SIZE && gridY >= 0 && gridY < GRID_SIZE) {
+                const cell = grid[gridY][gridX];
+                const probabilities = cell.particleMass > 0 ? calculateMoveProbabilities(gridX, gridY) : [];
+                const maxProb = probabilities.length > 0 ? Math.max(...probabilities.map(p => p.probability)) : 0;
+                
+                document.getElementById('info').innerHTML = 
+                    `Cell (${gridX}, ${gridY})<br>` +
+                    `Gravity Field: ${cell.gravityField.toFixed(4)}<br>` +
+                    `Particle Mass: ${cell.particleMass.toFixed(2)}<br>` +
+                    `Max Move Probability: ${maxProb.toFixed(3)}`;
+            }
+        }
+        
+        // Mouse tracking
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        });
+        
+        // Keyboard controls
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                togglePause();
+            }
+        });
+        
+        // Main loop
+        function gameLoop() {
+            step();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Initialize and start
+        initGrid();
+        
+        // Add some initial particles
+        for (let i = 0; i < 10; i++) {
+            addParticle();
+        }
+        
+        gameLoop();
+    </script>
+</body>
+</html>
